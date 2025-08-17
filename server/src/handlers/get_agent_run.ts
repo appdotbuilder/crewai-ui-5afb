@@ -3,33 +3,34 @@ import { agentRunsTable, agentOutputsTable } from '../db/schema';
 import { type AgentRunWithOutputs } from '../schema';
 import { eq } from 'drizzle-orm';
 
-export async function getAgentRun(id: number): Promise<AgentRunWithOutputs | null> {
+export const getAgentRun = async (id: number): Promise<AgentRunWithOutputs | null> => {
   try {
-    // First get the agent run
-    const runResults = await db.select()
+    // Get the agent run
+    const runResult = await db.select()
       .from(agentRunsTable)
       .where(eq(agentRunsTable.id, id))
       .execute();
 
-    if (runResults.length === 0) {
+    if (runResult.length === 0) {
       return null;
     }
 
-    const run = runResults[0];
+    const run = runResult[0];
 
-    // Get all outputs for this run
+    // Get associated outputs ordered by id (creation order)
     const outputs = await db.select()
       .from(agentOutputsTable)
       .where(eq(agentOutputsTable.run_id, id))
+      .orderBy(agentOutputsTable.id)
       .execute();
 
-    // Return the run with its outputs
+    // Return run with outputs
     return {
       ...run,
-      outputs: outputs
+      outputs
     };
   } catch (error) {
-    console.error('Get agent run failed:', error);
+    console.error('Failed to get agent run:', error);
     throw error;
   }
-}
+};

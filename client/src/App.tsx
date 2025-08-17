@@ -7,8 +7,8 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { trpc } from '@/utils/trpc';
-import { useState, useEffect, useCallback } from 'react';
-import type { Agent, AgentRun, AgentOutput, StartAgentRunInput } from '../../server/src/schema';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import type { Agent, AgentRun, AgentOutput, StartAgentRunInput, StreamOutputEvent } from '../../server/src/schema';
 
 function App() {
   // State management
@@ -19,6 +19,9 @@ function App() {
   const [outputs, setOutputs] = useState<AgentOutput[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+
+  // Ref to track the current subscription for cleanup
+  const subscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
 
   // Load agents on component mount
   const loadAgents = useCallback(async () => {
@@ -34,23 +37,100 @@ function App() {
     loadAgents();
   }, [loadAgents]);
 
-  // Load outputs for current run
-  const loadOutputs = useCallback(async (runId: number) => {
-    try {
-      const result = await trpc.getAgentOutputs.query({ runId });
-      setOutputs(result);
-    } catch (error) {
-      console.error('Failed to load outputs:', error);
-    }
+  // Cleanup subscription on component unmount
+  useEffect(() => {
+    return () => {
+      if (subscriptionRef.current) {
+        subscriptionRef.current.unsubscribe();
+        subscriptionRef.current = null;
+      }
+    };
   }, []);
 
   // Get selected agent details
   const selectedAgent = agents.find(agent => agent.id === selectedAgentId);
 
+  // Handle stream events from subscription
+  const handleStreamEvent = useCallback((event: StreamOutputEvent) => {
+    switch (event.type) {
+      case 'output':
+        // Add new output to the list
+        const outputData = event.data as AgentOutput;
+        setOutputs((prev: AgentOutput[]) => [...prev, outputData]);
+        break;
+
+      case 'status_update':
+        // Update the current run status
+        const statusData = event.data as { status: AgentRun['status'] };
+        setCurrentRun((prev: AgentRun | null) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            status: statusData.status,
+            // Update timestamps based on status
+            started_at: statusData.status === 'running' ? new Date() : prev.started_at,
+            completed_at: (statusData.status === 'completed' || statusData.status === 'failed') 
+              ? new Date() 
+              : prev.completed_at
+          };
+        });
+        break;
+
+      case 'complete':
+        // Mark as no longer running
+        setIsRunning(false);
+        
+        // Clean up the subscription
+        if (subscriptionRef.current) {
+          subscriptionRef.current.unsubscribe();
+          subscriptionRef.current = null;
+        }
+        break;
+
+      default:
+        console.warn('Unknown stream event type:', event);
+    }
+  }, []);
+
+  // Start streaming after agent run is created
+  const startStreaming = useCallback((runId: number) => {
+    // Clean up any existing subscription
+    if (subscriptionRef.current) {
+      subscriptionRef.current.unsubscribe();
+      subscriptionRef.current = null;
+    }
+
+    try {
+      // Create subscription to stream agent run
+      const subscription = trpc.streamAgentRun.subscribe(
+        { runId },
+        {
+          onData: handleStreamEvent,
+          onError: (error) => {
+            console.error('Streaming error:', error);
+            setIsRunning(false);
+          }
+        }
+      );
+
+      // Store subscription reference for cleanup
+      subscriptionRef.current = subscription;
+    } catch (error) {
+      console.error('Failed to start streaming:', error);
+      setIsRunning(false);
+    }
+  }, [handleStreamEvent]);
+
   // Start agent run
   const handleStartRun = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedAgentId || !inputText.trim()) return;
+
+    // Clean up any existing subscription before starting a new run
+    if (subscriptionRef.current) {
+      subscriptionRef.current.unsubscribe();
+      subscriptionRef.current = null;
+    }
 
     setIsLoading(true);
     try {
@@ -64,43 +144,14 @@ function App() {
       setOutputs([]);
       setIsRunning(true);
       
-      // Start polling for outputs (since streaming is not implemented)
-      pollForOutputs(run.id);
+      // Start streaming the agent run
+      startStreaming(run.id);
     } catch (error) {
       console.error('Failed to start agent run:', error);
     } finally {
       setIsLoading(false);
     }
   };
-
-  // Poll for outputs since streaming is not available yet
-  const pollForOutputs = useCallback((runId: number) => {
-    const interval = setInterval(async () => {
-      try {
-        const run = await trpc.getAgentRun.query({ id: runId });
-        if (run) {
-          setCurrentRun(run);
-          
-          await loadOutputs(runId);
-          
-          if (run.status === 'completed' || run.status === 'failed') {
-            setIsRunning(false);
-            clearInterval(interval);
-          }
-        }
-      } catch (error) {
-        console.error('Error polling for updates:', error);
-        setIsRunning(false);
-        clearInterval(interval);
-      }
-    }, 1000);
-
-    // Auto-stop polling after 5 minutes
-    setTimeout(() => {
-      clearInterval(interval);
-      setIsRunning(false);
-    }, 300000);
-  }, [loadOutputs]);
 
   // Get status badge color
   const getStatusColor = (status: AgentRun['status']) => {

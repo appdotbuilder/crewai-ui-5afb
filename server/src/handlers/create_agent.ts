@@ -4,7 +4,6 @@ import { type CreateAgentInput, type Agent } from '../schema';
 
 export const createAgent = async (input: CreateAgentInput): Promise<Agent> => {
   try {
-    // Insert agent record
     const result = await db.insert(agentsTable)
       .values({
         name: input.name,
@@ -12,14 +11,12 @@ export const createAgent = async (input: CreateAgentInput): Promise<Agent> => {
         role: input.role,
         goal: input.goal,
         backstory: input.backstory,
-        is_active: input.is_active // Zod default is already applied
+        is_active: input.is_active
       })
       .returning()
       .execute();
 
-    // Return the created agent
-    const agent = result[0];
-    return agent;
+    return result[0];
   } catch (error) {
     console.error('Agent creation failed:', error);
     throw error;

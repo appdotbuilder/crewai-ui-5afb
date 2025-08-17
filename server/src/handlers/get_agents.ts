@@ -1,19 +1,19 @@
 import { db } from '../db';
 import { agentsTable } from '../db/schema';
 import { type Agent } from '../schema';
-import { eq } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 
-export async function getAgents(): Promise<Agent[]> {
+export const getAgents = async (): Promise<Agent[]> => {
   try {
-    // Fetch all active agents from the database
-    const results = await db.select()
+    const result = await db.select()
       .from(agentsTable)
       .where(eq(agentsTable.is_active, true))
+      .orderBy(desc(agentsTable.created_at))
       .execute();
 
-    return results;
+    return result;
   } catch (error) {
-    console.error('Failed to fetch agents:', error);
+    console.error('Failed to get agents:', error);
     throw error;
   }
-}
+};
